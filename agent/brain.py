@@ -20,7 +20,7 @@ load_dotenv()
 logger = logging.getLogger("agentkit")
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 
 def cargar_config_prompts() -> dict:

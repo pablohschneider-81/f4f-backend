@@ -13,7 +13,7 @@ que el widget web funcione.
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 
 from agent.brain import generar_respuesta
 from agent.memory import inicializar_db, guardar_mensaje, obtener_historial
+from agent.tools import calificar_lead
+from agent.notifications import enviar_notificacion_lead
 
 load_dotenv()
 
@@ -80,7 +82,7 @@ class ChatWebRequest(BaseModel):
 
 
 @app.post("/chat/web")
-async def chat_web(payload: ChatWebRequest):
+async def chat_web(payload: ChatWebRequest, background_tasks: BackgroundTasks):
     """
     Endpoint que consume el widget de chat embebido en la landing.
     Usa el mismo cerebro (brain.py) y memoria (memory.py) que WhatsApp,
@@ -91,6 +93,17 @@ async def chat_web(payload: ChatWebRequest):
     respuesta = await generar_respuesta(payload.message, historial)
     await guardar_mensaje(telefono_virtual, "user", payload.message)
     await guardar_mensaje(telefono_virtual, "assistant", respuesta)
+
+    if calificar_lead(payload.message) == "alto":
+        historial_completo = historial + [
+            {"role": "user", "content": payload.message},
+            {"role": "assistant", "content": respuesta},
+        ]
+        # En background: no hacemos esperar al cliente por el envío del email
+        background_tasks.add_task(
+            enviar_notificacion_lead, telefono_virtual, payload.message, historial_completo
+        )
+
     return {"reply": respuesta}
 
 
@@ -106,7 +119,7 @@ if proveedor is not None:
         return {"status": "ok"}
 
     @app.post("/webhook")
-    async def webhook_handler(request: Request):
+    async def webhook_handler(request: Request, background_tasks: BackgroundTasks):
         """Recibe mensajes de WhatsApp via el proveedor configurado."""
         try:
             mensajes = await proveedor.parsear_webhook(request)
@@ -122,6 +135,15 @@ if proveedor is not None:
 
                 await guardar_mensaje(msg.telefono, "user", msg.texto)
                 await guardar_mensaje(msg.telefono, "assistant", respuesta)
+
+                if calificar_lead(msg.texto) == "alto":
+                    historial_completo = historial + [
+                        {"role": "user", "content": msg.texto},
+                        {"role": "assistant", "content": respuesta},
+                    ]
+                    background_tasks.add_task(
+                        enviar_notificacion_lead, msg.telefono, msg.texto, historial_completo
+                    )
 
                 await proveedor.enviar_mensaje(msg.telefono, respuesta)
 

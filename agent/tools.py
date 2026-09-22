@@ -70,7 +70,12 @@ async def registrar_lead(telefono: str, nombre: str | None, interes: str | None)
 def calificar_lead(mensaje: str) -> str:
     """Heurística simple para calificar el nivel de interés. Retorna alto/medio/bajo."""
     texto = mensaje.lower()
-    señales_alto = ["quiero anotarme", "cómo pago", "como pago", "quiero empezar", "quiero comprar", "me interesa"]
+    señales_alto = [
+        "quiero anotarme", "cómo pago", "como pago", "quiero empezar", "quiero comprar", "me interesa",
+        "quiero agendar", "quiero una mentoría", "quiero una mentoria", "quiero reservar",
+        "mi disponibilidad", "mi email es", "mi correo es", "mi teléfono es", "mi telefono es",
+        "@gmail", "@hotmail", "@outlook", "@yahoo",
+    ]
     señales_medio = ["cuánto cuesta", "cuanto cuesta", "precio", "info", "información", "informacion"]
 
     if any(s in texto for s in señales_alto):
