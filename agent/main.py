@@ -45,6 +45,14 @@ if WHATSAPP_PROVIDER:
     from agent.providers import obtener_proveedor
     proveedor = obtener_proveedor()
 
+# Conversaciones ya marcadas como lead — una vez detectado el interés,
+# seguimos mandando el email actualizado en cada mensaje siguiente, para
+# que el último aviso que llegue tenga los datos completos (nombre,
+# horario, motivo) aunque el cliente los haya dado en mensajes separados.
+# En memoria: se reinicia si el servidor se reinicia/redeploya (no crítico
+# para este caso de uso).
+_leads_activos: set[str] = set()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -94,7 +102,8 @@ async def chat_web(payload: ChatWebRequest, background_tasks: BackgroundTasks):
     await guardar_mensaje(telefono_virtual, "user", payload.message)
     await guardar_mensaje(telefono_virtual, "assistant", respuesta)
 
-    if calificar_lead(payload.message) == "alto":
+    if calificar_lead(payload.message) == "alto" or telefono_virtual in _leads_activos:
+        _leads_activos.add(telefono_virtual)
         historial_completo = historial + [
             {"role": "user", "content": payload.message},
             {"role": "assistant", "content": respuesta},
@@ -136,7 +145,8 @@ if proveedor is not None:
                 await guardar_mensaje(msg.telefono, "user", msg.texto)
                 await guardar_mensaje(msg.telefono, "assistant", respuesta)
 
-                if calificar_lead(msg.texto) == "alto":
+                if calificar_lead(msg.texto) == "alto" or msg.telefono in _leads_activos:
+                    _leads_activos.add(msg.telefono)
                     historial_completo = historial + [
                         {"role": "user", "content": msg.texto},
                         {"role": "assistant", "content": respuesta},
