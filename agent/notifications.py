@@ -1,10 +1,11 @@
-# agent/notifications.py — Notificaciones por email a Hernán
+# agent/notifications.py — Notificaciones por email a Hernán (vía Resend)
 # Generado por AgentKit
 
 """
 Avisa por email cuando alguien muestra interés real (lead) o pide una
-mentoría por el chat. Usa Gmail SMTP con una "contraseña de aplicación"
-(gratis, no requiere ningún servicio de terceros).
+mentoría por el chat. Usa la API HTTP de Resend (https://resend.com) en
+vez de SMTP directo — los hostings gratuitos (como el plan free de Render)
+suelen bloquear el puerto SMTP saliente, pero HTTPS (443) siempre funciona.
 
 El email se manda en HTML con la identidad visual de Fittest4Fit (fondo
 navy, tipografía serif, acento dorado) para que se distinga de un vistazo
@@ -14,16 +15,13 @@ clientes de correo que no rendericen HTML.
 
 import os
 import html
-import smtplib
 import logging
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import httpx
 from datetime import datetime
 
 logger = logging.getLogger("agentkit")
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
+RESEND_API_URL = "https://api.resend.com/emails"
 
 # Tokens de marca F4F (ver skill fittest4fit-marca / brand-book.md)
 _BG = "#04101F"
@@ -36,7 +34,7 @@ _CARD_BG = "#0d1f33"
 
 def notificaciones_configuradas() -> bool:
     """True si las variables de entorno necesarias están cargadas."""
-    return bool(os.getenv("NOTIFY_EMAIL_FROM") and os.getenv("NOTIFY_EMAIL_APP_PASSWORD"))
+    return bool(os.getenv("RESEND_API_KEY") and os.getenv("NOTIFY_EMAIL_TO"))
 
 
 def _construir_html(identificador: str, fecha: str, mensaje_disparador: str, historial: list[dict]) -> str:
@@ -125,7 +123,7 @@ def _construir_html(identificador: str, fecha: str, mensaje_disparador: str, his
 </html>"""
 
 
-def enviar_notificacion_lead(identificador: str, mensaje_disparador: str, historial: list[dict]) -> None:
+async def enviar_notificacion_lead(identificador: str, mensaje_disparador: str, historial: list[dict]) -> None:
     """
     Envía un email a Hernán avisando que alguien mostró interés real en un
     programa o pidió una mentoría, con la conversación reciente como contexto.
@@ -138,16 +136,15 @@ def enviar_notificacion_lead(identificador: str, mensaje_disparador: str, histor
     if not notificaciones_configuradas():
         logger.warning(
             "Notificaciones por email no configuradas "
-            "(faltan NOTIFY_EMAIL_FROM / NOTIFY_EMAIL_APP_PASSWORD en el .env)"
+            "(faltan RESEND_API_KEY / NOTIFY_EMAIL_TO en el .env)"
         )
         return
 
-    remitente = os.getenv("NOTIFY_EMAIL_FROM")
-    password = os.getenv("NOTIFY_EMAIL_APP_PASSWORD")
-    destinatario = os.getenv("NOTIFY_EMAIL_TO", remitente)
+    api_key = os.getenv("RESEND_API_KEY")
+    destinatario = os.getenv("NOTIFY_EMAIL_TO")
+    remitente = os.getenv("NOTIFY_EMAIL_FROM", "F4F Assistant <onboarding@resend.dev>")
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-    # Texto plano de respaldo (clientes de mail que no rendericen HTML)
     transcripcion_plana = "\n".join(
         f"{'Cliente' if m['role'] == 'user' else 'F4F Assistant'}: {m['content']}"
         for m in historial[-10:]
@@ -161,18 +158,24 @@ def enviar_notificacion_lead(identificador: str, mensaje_disparador: str, histor
         f"{transcripcion_plana}\n"
     )
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Nuevo lead - F4F Assistant"
-    msg["From"] = remitente
-    msg["To"] = destinatario
-    msg.attach(MIMEText(cuerpo_plano, "plain", "utf-8"))
-    msg.attach(MIMEText(_construir_html(identificador, fecha, mensaje_disparador, historial), "html", "utf-8"))
+    payload = {
+        "from": remitente,
+        "to": [destinatario],
+        "subject": "Nuevo lead - F4F Assistant",
+        "html": _construir_html(identificador, fecha, mensaje_disparador, historial),
+        "text": cuerpo_plano,
+    }
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(remitente, password)
-            server.sendmail(remitente, [destinatario], msg.as_string())
-        logger.info(f"Notificacion de lead enviada a {destinatario}")
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                RESEND_API_URL,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        if r.status_code >= 400:
+            logger.error(f"Error enviando notificacion por email (Resend {r.status_code}): {r.text}")
+        else:
+            logger.info(f"Notificacion de lead enviada a {destinatario}")
     except Exception as e:
         logger.error(f"Error enviando notificacion por email: {e}")
