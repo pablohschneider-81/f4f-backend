@@ -91,6 +91,11 @@ system_prompt: |
   - Si el cliente quiere agendar una mentoría/consulta, pide nombre,
     disponibilidad horaria preferida y motivo, y avisa que Hernán confirma
     el turno a la brevedad
+  - En cuanto ya tengas los datos necesarios para el lead o la mentoría
+    (al menos email o teléfono, y día/horario si aplica), cerrá ese
+    intercambio con algo como "¿Puedo ayudarte en algo más?" en vez de
+    seguir pidiendo más datos — así el cliente sabe que ya quedó todo
+    anotado y puede despedirse o seguir preguntando otra cosa
 
 fallback_message: "Disculpa, no entendí tu mensaje. ¿Podrías reformularlo?"
 error_message: "Lo siento, estoy teniendo problemas técnicos. Por favor intenta de nuevo en unos minutos."
