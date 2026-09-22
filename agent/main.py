@@ -11,9 +11,10 @@ que el widget web funcione.
 """
 
 import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
-from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -45,13 +46,39 @@ if WHATSAPP_PROVIDER:
     from agent.providers import obtener_proveedor
     proveedor = obtener_proveedor()
 
-# Conversaciones ya marcadas como lead — una vez detectado el interés,
-# seguimos mandando el email actualizado en cada mensaje siguiente, para
-# que el último aviso que llegue tenga los datos completos (nombre,
-# horario, motivo) aunque el cliente los haya dado en mensajes separados.
-# En memoria: se reinicia si el servidor se reinicia/redeploya (no crítico
-# para este caso de uso).
+# ── Notificación de leads con "debounce" ───────────────────────────────
+# Cuando se detecta interés real, NO mandamos el email al toque: esperamos
+# unos segundos por si el cliente sigue completando datos (día, hora,
+# motivo) en mensajes separados. Si llega un mensaje nuevo de esa misma
+# conversación antes de que se cumpla la espera, la reiniciamos. Al final
+# se manda UN SOLO email con la conversación completa hasta ese momento.
+NOTIFICACION_DEBOUNCE_SEGUNDOS = 60
+
 _leads_activos: set[str] = set()
+_notificaciones_pendientes: dict[str, asyncio.Task] = {}
+
+
+async def _enviar_notificacion_con_espera(identificador: str, mensaje_disparador: str) -> None:
+    """Espera NOTIFICACION_DEBOUNCE_SEGUNDOS y manda el email con el historial más reciente."""
+    try:
+        await asyncio.sleep(NOTIFICACION_DEBOUNCE_SEGUNDOS)
+    except asyncio.CancelledError:
+        # Llegó un mensaje nuevo antes de tiempo — la nueva tarea programada se encarga
+        return
+    historial_actual = await obtener_historial(identificador)
+    await enviar_notificacion_lead(identificador, mensaje_disparador, historial_actual)
+    _notificaciones_pendientes.pop(identificador, None)
+
+
+def _programar_notificacion_lead(identificador: str, mensaje_disparador: str) -> None:
+    """Marca la conversación como lead y (re)programa el envío del email, cancelando la espera anterior si había."""
+    _leads_activos.add(identificador)
+    tarea_previa = _notificaciones_pendientes.get(identificador)
+    if tarea_previa and not tarea_previa.done():
+        tarea_previa.cancel()
+    _notificaciones_pendientes[identificador] = asyncio.create_task(
+        _enviar_notificacion_con_espera(identificador, mensaje_disparador)
+    )
 
 
 @asynccontextmanager
@@ -90,7 +117,7 @@ class ChatWebRequest(BaseModel):
 
 
 @app.post("/chat/web")
-async def chat_web(payload: ChatWebRequest, background_tasks: BackgroundTasks):
+async def chat_web(payload: ChatWebRequest):
     """
     Endpoint que consume el widget de chat embebido en la landing.
     Usa el mismo cerebro (brain.py) y memoria (memory.py) que WhatsApp,
@@ -103,15 +130,7 @@ async def chat_web(payload: ChatWebRequest, background_tasks: BackgroundTasks):
     await guardar_mensaje(telefono_virtual, "assistant", respuesta)
 
     if calificar_lead(payload.message) == "alto" or telefono_virtual in _leads_activos:
-        _leads_activos.add(telefono_virtual)
-        historial_completo = historial + [
-            {"role": "user", "content": payload.message},
-            {"role": "assistant", "content": respuesta},
-        ]
-        # En background: no hacemos esperar al cliente por el envío del email
-        background_tasks.add_task(
-            enviar_notificacion_lead, telefono_virtual, payload.message, historial_completo
-        )
+        _programar_notificacion_lead(telefono_virtual, payload.message)
 
     return {"reply": respuesta}
 
@@ -128,7 +147,7 @@ if proveedor is not None:
         return {"status": "ok"}
 
     @app.post("/webhook")
-    async def webhook_handler(request: Request, background_tasks: BackgroundTasks):
+    async def webhook_handler(request: Request):
         """Recibe mensajes de WhatsApp via el proveedor configurado."""
         try:
             mensajes = await proveedor.parsear_webhook(request)
@@ -146,14 +165,7 @@ if proveedor is not None:
                 await guardar_mensaje(msg.telefono, "assistant", respuesta)
 
                 if calificar_lead(msg.texto) == "alto" or msg.telefono in _leads_activos:
-                    _leads_activos.add(msg.telefono)
-                    historial_completo = historial + [
-                        {"role": "user", "content": msg.texto},
-                        {"role": "assistant", "content": respuesta},
-                    ]
-                    background_tasks.add_task(
-                        enviar_notificacion_lead, msg.telefono, msg.texto, historial_completo
-                    )
+                    _programar_notificacion_lead(msg.telefono, msg.texto)
 
                 await proveedor.enviar_mensaje(msg.telefono, respuesta)
 
