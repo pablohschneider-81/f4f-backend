@@ -8,10 +8,12 @@ de los límites de uso de Google AI Studio).
 """
 
 import os
+import asyncio
 import yaml
 import logging
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -73,24 +75,35 @@ async def generar_respuesta(mensaje: str, historial: list[dict]) -> str:
 
     contenidos.append(types.Content(role="user", parts=[types.Part(text=mensaje)]))
 
-    try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=contenidos,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=1024,
-            ),
-        )
+    # Gemini (capa gratis) a veces responde 503/429 por demanda alta — son
+    # errores transitorios, reintentamos una vez antes de rendirnos.
+    intentos = 2
+    for intento in range(1, intentos + 1):
+        try:
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=contenidos,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    max_output_tokens=1024,
+                ),
+            )
 
-        respuesta = (response.text or "").strip()
-        if not respuesta:
-            logger.warning("Gemini devolvió una respuesta vacía")
+            respuesta = (response.text or "").strip()
+            if not respuesta:
+                logger.warning("Gemini devolvió una respuesta vacía")
+                return obtener_mensaje_error()
+
+            logger.info("Respuesta generada con Gemini")
+            return respuesta
+
+        except genai_errors.ServerError as e:
+            logger.warning(f"Error transitorio de Gemini (intento {intento}/{intentos}): {e}")
+            if intento < intentos:
+                await asyncio.sleep(1.5)
+                continue
             return obtener_mensaje_error()
 
-        logger.info("Respuesta generada con Gemini")
-        return respuesta
-
-    except Exception as e:
-        logger.error(f"Error Gemini API: {e}")
-        return obtener_mensaje_error()
+        except Exception as e:
+            logger.error(f"Error Gemini API: {e}")
+            return obtener_mensaje_error()
