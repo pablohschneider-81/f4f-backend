@@ -58,7 +58,7 @@ _leads_activos: set[str] = set()
 _notificaciones_pendientes: dict[str, asyncio.Task] = {}
 
 
-async def _enviar_notificacion_con_espera(identificador: str, mensaje_disparador: str) -> None:
+async def _enviar_notificacion_con_espera(identificador: str) -> None:
     """Espera NOTIFICACION_DEBOUNCE_SEGUNDOS y manda el email con el historial más reciente."""
     try:
         await asyncio.sleep(NOTIFICACION_DEBOUNCE_SEGUNDOS)
@@ -66,18 +66,18 @@ async def _enviar_notificacion_con_espera(identificador: str, mensaje_disparador
         # Llegó un mensaje nuevo antes de tiempo — la nueva tarea programada se encarga
         return
     historial_actual = await obtener_historial(identificador)
-    await enviar_notificacion_lead(identificador, mensaje_disparador, historial_actual)
+    await enviar_notificacion_lead(identificador, historial_actual)
     _notificaciones_pendientes.pop(identificador, None)
 
 
-def _programar_notificacion_lead(identificador: str, mensaje_disparador: str) -> None:
+def _programar_notificacion_lead(identificador: str) -> None:
     """Marca la conversación como lead y (re)programa el envío del email, cancelando la espera anterior si había."""
     _leads_activos.add(identificador)
     tarea_previa = _notificaciones_pendientes.get(identificador)
     if tarea_previa and not tarea_previa.done():
         tarea_previa.cancel()
     _notificaciones_pendientes[identificador] = asyncio.create_task(
-        _enviar_notificacion_con_espera(identificador, mensaje_disparador)
+        _enviar_notificacion_con_espera(identificador)
     )
 
 
@@ -130,7 +130,7 @@ async def chat_web(payload: ChatWebRequest):
     await guardar_mensaje(telefono_virtual, "assistant", respuesta)
 
     if calificar_lead(payload.message) == "alto" or telefono_virtual in _leads_activos:
-        _programar_notificacion_lead(telefono_virtual, payload.message)
+        _programar_notificacion_lead(telefono_virtual)
 
     return {"reply": respuesta}
 
@@ -165,7 +165,7 @@ if proveedor is not None:
                 await guardar_mensaje(msg.telefono, "assistant", respuesta)
 
                 if calificar_lead(msg.texto) == "alto" or msg.telefono in _leads_activos:
-                    _programar_notificacion_lead(msg.telefono, msg.texto)
+                    _programar_notificacion_lead(msg.telefono)
 
                 await proveedor.enviar_mensaje(msg.telefono, respuesta)
 

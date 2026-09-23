@@ -13,7 +13,6 @@ import yaml
 import logging
 from google import genai
 from google.genai import types
-from google.genai import errors as genai_errors
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -75,9 +74,11 @@ async def generar_respuesta(mensaje: str, historial: list[dict]) -> str:
 
     contenidos.append(types.Content(role="user", parts=[types.Part(text=mensaje)]))
 
-    # Gemini (capa gratis) a veces responde 503/429 por demanda alta — son
-    # errores transitorios, reintentamos una vez antes de rendirnos.
-    intentos = 2
+    # Reintentamos ante CUALQUIER error transitorio: alta demanda de Gemini
+    # (503/429), o problemas de red al primer llamado después de que el
+    # servidor gratuito de Render estuvo "dormido" (arranque en frío). Solo
+    # nos rendimos después de agotar los intentos.
+    intentos = 3
     for intento in range(1, intentos + 1):
         try:
             response = client.models.generate_content(
@@ -92,18 +93,18 @@ async def generar_respuesta(mensaje: str, historial: list[dict]) -> str:
             respuesta = (response.text or "").strip()
             if not respuesta:
                 logger.warning("Gemini devolvió una respuesta vacía")
+                if intento < intentos:
+                    await asyncio.sleep(intento * 1.5)
+                    continue
                 return obtener_mensaje_error()
 
-            logger.info("Respuesta generada con Gemini")
+            logger.info(f"Respuesta generada con Gemini (intento {intento}/{intentos})")
             return respuesta
 
-        except genai_errors.ServerError as e:
-            logger.warning(f"Error transitorio de Gemini (intento {intento}/{intentos}): {e}")
-            if intento < intentos:
-                await asyncio.sleep(1.5)
-                continue
-            return obtener_mensaje_error()
-
         except Exception as e:
-            logger.error(f"Error Gemini API: {e}")
+            logger.warning(f"Error de Gemini (intento {intento}/{intentos}): {e}")
+            if intento < intentos:
+                await asyncio.sleep(intento * 1.5)
+                continue
+            logger.error(f"Error Gemini API tras {intentos} intentos: {e}")
             return obtener_mensaje_error()

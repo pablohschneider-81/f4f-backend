@@ -98,4 +98,4 @@ system_prompt: |
     anotado y puede despedirse o seguir preguntando otra cosa
 
 fallback_message: "Disculpa, no entendí tu mensaje. ¿Podrías reformularlo?"
-error_message: "Lo siento, estoy teniendo problemas técnicos. Por favor intenta de nuevo en unos minutos."
+error_message: "Estoy recibiendo muchas consultas en este momento. Prueba de nuevo en un minuto, o si prefieres, escríbenos directo por WhatsApp y te respondemos enseguida."
